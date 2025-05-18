@@ -5,7 +5,6 @@ import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
 
-import java.io.File;
 import java.util.*;
 import dev.kcbleeker.recoverymod.RecoveryTracking.TrackedItem;
 
@@ -13,14 +12,10 @@ import dev.kcbleeker.recoverymod.RecoveryTracking.TrackedItem;
  * Handles the /recover command logic and inventory listing.
  */
 public class RecoveryCommandHandler {
-    private final RecoveryPersistence persistence;
-    private final File dataFolder;
     private final Map<UUID, List<TrackedItem>> trackedItems;
     private final java.util.function.Consumer<UUID> scheduleTrackingSave;
 
-    public RecoveryCommandHandler(RecoveryPersistence persistence, File dataFolder, Map<UUID, List<TrackedItem>> trackedItems, java.util.function.Consumer<UUID> scheduleTrackingSave) {
-        this.persistence = persistence;
-        this.dataFolder = dataFolder;
+    public RecoveryCommandHandler(Map<UUID, List<TrackedItem>> trackedItems, java.util.function.Consumer<UUID> scheduleTrackingSave) {
         this.trackedItems = trackedItems;
         this.scheduleTrackingSave = scheduleTrackingSave;
     }
@@ -158,13 +153,5 @@ public class RecoveryCommandHandler {
         scheduleTrackingSave.accept(target.getUniqueId());
         sender.sendMessage("All lost items forcibly restored for " + target.getName() + ".");
         return true;
-    }
-
-    private boolean isDropTracked(UUID playerId, UUID dropId) {
-        List<TrackedItem> items = trackedItems.getOrDefault(playerId, Collections.emptyList());
-        for (TrackedItem ti : items) {
-            if (dropId.equals(ti.getDropId())) return true;
-        }
-        return false;
     }
 }
