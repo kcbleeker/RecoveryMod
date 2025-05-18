@@ -1,0 +1,23 @@
+# Maven/Java
+/target/
+*.class
+*.log
+*.iml
+.idea/
+*.swp
+*.swo
+.DS_Store
+*.jar
+
+# VSCode
+.vscode/
+
+# OS
+Thumbs.db
+
+# User files
+*.local
+*.env
+
+# Ignore GitHub workflow/config
+.github/
