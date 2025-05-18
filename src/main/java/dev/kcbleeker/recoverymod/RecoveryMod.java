@@ -9,6 +9,7 @@ import org.bukkit.event.Listener;
 import org.bukkit.event.entity.PlayerDeathEvent;
 import org.bukkit.event.entity.EntityPickupItemEvent;
 import org.bukkit.event.entity.EntityRemoveEvent;
+import org.bukkit.event.entity.ItemMergeEvent;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.plugin.PluginManager;
 import org.bukkit.scheduler.BukkitRunnable;
@@ -73,7 +74,12 @@ public class RecoveryMod extends JavaPlugin implements Listener {
 
     private List<TrackedItem> serializeInventory(Player player) {
         List<TrackedItem> tracked = new ArrayList<>();
-        addItems(tracked, player.getInventory().getContents());
+        ItemStack[] contents = player.getInventory().getContents();
+        // Only add main inventory slots (0-35)
+        for (int i = 0; i < 36 && i < contents.length; i++) {
+            ItemStack item = contents[i];
+            if (item != null) tracked.add(createTrackedItem(item));
+        }
         addItems(tracked, player.getInventory().getArmorContents());
         addOffhand(tracked, player);
         return tracked;
@@ -157,6 +163,47 @@ public class RecoveryMod extends JavaPlugin implements Listener {
             }
         }
         return false;
+    }
+
+    @EventHandler
+    public void onItemMerge(ItemMergeEvent event) {
+        UUID sourceId = event.getEntity().getUniqueId();
+        UUID targetId = event.getTarget().getUniqueId();
+        UUID playerIdSource = dropToPlayer.get(sourceId);
+        UUID playerIdTarget = dropToPlayer.get(targetId);
+        if (playerIdSource == null && playerIdTarget == null) return;
+        UUID playerId = playerIdSource != null ? playerIdSource : playerIdTarget;
+        List<TrackedItem> items = trackedItems.get(playerId);
+        if (items == null) return;
+        // Find tracked items for both source and target
+        int sourceIdx = -1, targetIdx = -1;
+        for (int i = 0; i < items.size(); i++) {
+            UUID dropId = items.get(i).getDropId();
+            if (dropId != null && dropId.equals(sourceId)) sourceIdx = i;
+            if (dropId != null && dropId.equals(targetId)) targetIdx = i;
+        }
+        if (sourceIdx == -1 && targetIdx == -1) return;
+        // Merge logic: combine counts, keep target, remove source
+        if (sourceIdx != -1 && targetIdx != -1) {
+            Map<String, Object> targetData = new HashMap<>(items.get(targetIdx).getItemData());
+            Map<String, Object> sourceData = items.get(sourceIdx).getItemData();
+            int targetCount = (int) targetData.getOrDefault("amount", targetData.getOrDefault("count", 1));
+            int sourceCount = (int) sourceData.getOrDefault("amount", sourceData.getOrDefault("count", 1));
+            int newCount = targetCount + sourceCount;
+            if (targetData.containsKey("amount")) targetData.put("amount", newCount);
+            else targetData.put("count", newCount);
+            items.set(targetIdx, new TrackedItem(targetData, targetId));
+            items.remove(sourceIdx > targetIdx ? sourceIdx : sourceIdx); // Remove source
+            dropToPlayer.remove(sourceId);
+        } else if (sourceIdx != -1) {
+            // Only source tracked, update dropId to target
+            Map<String, Object> data = new HashMap<>(items.get(sourceIdx).getItemData());
+            items.set(sourceIdx, new TrackedItem(data, targetId));
+            dropToPlayer.remove(sourceId);
+            dropToPlayer.put(targetId, playerId);
+        }
+        // Save changes
+        scheduleTrackingSave(playerId);
     }
 
     @Override
