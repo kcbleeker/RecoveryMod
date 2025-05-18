@@ -7,6 +7,8 @@ import org.bukkit.inventory.ItemStack;
 
 import java.util.*;
 import dev.kcbleeker.recoverymod.RecoveryTracking.TrackedItem;
+import net.kyori.adventure.text.minimessage.MiniMessage;
+import net.kyori.adventure.text.Component;
 
 /**
  * Handles the /recover command logic and inventory listing.
@@ -44,34 +46,30 @@ public class RecoveryCommandHandler {
             sender.sendMessage("No recovery data found for this player.");
             return true;
         }
+        MiniMessage mm = MiniMessage.miniMessage();
         StringBuilder sb = new StringBuilder();
-        sb.append("Lost inventory for ").append(target.getName()).append(":\n");
-        int idx = 0;
+        sb.append("<gray>Lost inventory for <yellow>").append(target.getName()).append("</yellow>:</gray>\n");
+        sb.append("<gray><b>[Status]      Item                Amount</b></gray>\n");
         for (TrackedItem ti : items) {
             Map<String, Object> itemData = ti.getItemData();
             UUID dropId = ti.getDropId();
-            String itemName = null;
+            String itemName;
             if (itemData.containsKey("type")) {
                 itemName = (String) itemData.get("type");
             } else if (itemData.containsKey("id")) {
                 String id = (String) itemData.get("id");
-                if (id.startsWith("minecraft:")) {
-                    itemName = id.substring("minecraft:".length()).toUpperCase();
-                } else {
-                    itemName = id.toUpperCase();
-                }
+                itemName = id.startsWith("minecraft:") ? id.substring("minecraft:".length()).toUpperCase() : id.toUpperCase();
             } else {
                 itemName = "Unknown Item";
             }
             int amount = (int) itemData.getOrDefault("amount", itemData.getOrDefault("count", 1));
             Object despawnedVal = itemData.get("_despawned");
-            String despawnedType = despawnedVal == null ? "null" : despawnedVal.getClass().getName();
-            Bukkit.getLogger().info("[RecoveryMod] [List] Item #" + (idx+1) + " _despawned value: " + despawnedVal + " (type: " + despawnedType + ")");
             String state;
+            String color;
             if (Boolean.TRUE.equals(despawnedVal) || "true".equals(despawnedVal)) {
                 state = "[Despawned]";
+                color = "<red>";
             } else if (dropId != null) {
-                // Check if the entity still exists in any world
                 boolean found = false;
                 for (org.bukkit.World world : Bukkit.getWorlds()) {
                     if (world.getEntity(dropId) != null) {
@@ -80,13 +78,21 @@ public class RecoveryCommandHandler {
                     }
                 }
                 state = found ? "[On Ground]" : "[Unknown]";
+                color = found ? "<green>" : "<gray>";
             } else {
                 state = "[Unknown]";
+                color = "<gray>";
             }
-            sb.append(state).append(" ").append(itemName).append(" x").append(amount).append(" (#").append(idx + 1).append(")\n");
-            idx++;
+            sb.append(color)
+              .append(String.format("%-12s", state))
+              .append("<white>")
+              .append(String.format("%-20s", itemName))
+              .append("<yellow>")
+              .append(amount)
+              .append("</yellow></white></gray>\n");
         }
-        sender.sendMessage(sb.toString());
+        Component msg = mm.deserialize(sb.toString());
+        sender.sendMessage(msg);
         return true;
     }
 

@@ -12,24 +12,17 @@ This project is licensed under the [Apache License 2.0](LICENSE).
 ## Commands (OP only)
 - `/recover <PlayerName>` — Restore items that have despawned.
 - `/recover <PlayerName> list` — Show items lost (despawned) or still on the ground.
+
+  - **Item Statuses:**
+    - `[Despawned]` — The item has despawned and is eligible for recovery.
+    - `[On Ground]` — The item is still present as an entity in the world and can be picked up normally.
+    - `[Unknown]` — The item's state could not be determined (e.g., the entity is missing but no despawn event was detected).
+
+  - **Response Structure:**
+    - Each item is shown as:
+      `[Status] ItemName xAmount`
+    - Example: `[Despawned] DIAMOND_SWORD x1`
+
 - `/recover <PlayerName> force` — Forcibly restore all tracked lost items, even if not despawned.
 
 Picked-up items are not tracked or recoverable.
-
-## Important Note: Paper ItemDespawnEvent Bug
-RecoveryMod relies on the `ItemDespawnEvent` to detect when dropped items are truly lost (despawned). **On default Paper configurations, this event will fire as expected and RecoveryMod will work correctly.**
-
-However, if you have set a custom `despawn-time` for items in your `paper-world.yml`, there is a known bug in Paper where `ItemDespawnEvent` does not fire for those items. This can prevent some lost items from being marked as recoverable.
-
-Example `paper-world.yml` configuration that triggers the bug:
-
-```yaml
-# paper-world.yml
-# ...existing config...
-despawn-time:
-  item: 2000
-```
-
-A fix is pending in this Paper PR: https://github.com/PaperMC/Paper/pull/12561
-
-If you experience issues with items not being recoverable after despawn, check your `paper-world.yml` configuration and follow the progress of the above PR. Once merged and released, updating your server will resolve this issue.

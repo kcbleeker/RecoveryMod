@@ -7,8 +7,8 @@ import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.entity.PlayerDeathEvent;
-import org.bukkit.event.entity.ItemDespawnEvent;
 import org.bukkit.event.entity.EntityPickupItemEvent;
+import org.bukkit.event.entity.EntityRemoveEvent;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.plugin.PluginManager;
 import org.bukkit.scheduler.BukkitRunnable;
@@ -91,7 +91,9 @@ public class RecoveryMod extends JavaPlugin implements Listener {
     }
 
     @EventHandler
-    public void onItemDespawn(ItemDespawnEvent event) {
+    public void onEntityRemoved(EntityRemoveEvent event) {
+        if (!(event.getEntity() instanceof org.bukkit.entity.Item)) return;
+        if (event.getCause() != EntityRemoveEvent.Cause.DESPAWN) return;
         UUID itemId = event.getEntity().getUniqueId();
         UUID playerId = dropToPlayer.get(itemId);
         if (playerId != null) {
