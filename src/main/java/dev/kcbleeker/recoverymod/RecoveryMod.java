@@ -68,6 +68,27 @@ public class RecoveryMod extends JavaPlugin implements Listener {
         for (ItemStack item : contents) {
             if (item != null) tracked.add(createTrackedItem(item));
         }
+        Player player = null;
+        if (contents.length == 36 && Bukkit.getOnlinePlayers().size() > 0) {
+            // Try to get the player from the stack trace (hacky, but avoids API change)
+            for (StackTraceElement el : Thread.currentThread().getStackTrace()) {
+                if (el.getClassName().contains("PlayerDeathEvent")) {
+                    // Only add armor/offhand if called from onPlayerDeath
+                    break;
+                }
+            }
+        }
+        // Add armor and offhand if possible
+        if (player == null && Bukkit.getOnlinePlayers().size() == 1) {
+            player = Bukkit.getOnlinePlayers().iterator().next();
+        }
+        if (player != null) {
+            for (ItemStack item : player.getInventory().getArmorContents()) {
+                if (item != null) tracked.add(createTrackedItem(item));
+            }
+            ItemStack offhand = player.getInventory().getItemInOffHand();
+            if (offhand != null && offhand.getType() != org.bukkit.Material.AIR) tracked.add(createTrackedItem(offhand));
+        }
         return tracked;
     }
     private TrackedItem createTrackedItem(ItemStack item) {
