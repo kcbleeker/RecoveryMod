@@ -56,8 +56,20 @@ public class RecoveryCommandHandler {
             Map<String, Object> itemData = serialized.get(i);
             UUID dropId = slotMap.get(i);
             if (itemData != null) {
-                String itemName = (String) itemData.getOrDefault("type", "?");
-                int amount = (int) itemData.getOrDefault("amount", 1);
+                String itemName = null;
+                if (itemData.containsKey("type")) {
+                    itemName = (String) itemData.get("type");
+                } else if (itemData.containsKey("id")) {
+                    String id = (String) itemData.get("id");
+                    if (id.startsWith("minecraft:")) {
+                        itemName = id.substring("minecraft:".length()).toUpperCase();
+                    } else {
+                        itemName = id.toUpperCase();
+                    }
+                } else {
+                    itemName = "Unknown Item";
+                }
+                int amount = (int) itemData.getOrDefault("amount", itemData.getOrDefault("count", 1));
                 // Only show items that are still tracked (on ground) or have despawned (dropId == null)
                 if (dropId == null) {
                     sb.append("[Despawned] ");

@@ -115,7 +115,10 @@ public class RecoveryMod extends JavaPlugin implements Listener {
         int slot = 0;
         for (ItemStack item : contents) {
             if (item != null) {
-                serialized.add(item.serialize());
+                Map<String, Object> serializedItem = item.serialize();
+                // Always add the type explicitly for clarity
+                serializedItem.put("type", item.getType().name());
+                serialized.add(serializedItem);
                 for (Item drop : event.getEntity().getWorld().getEntitiesByClass(Item.class)) {
                     if (drop.getLocation().distance(player.getLocation()) < 2.5 && drop.getPickupDelay() != 0 && !dropIds.contains(drop.getUniqueId())) {
                         slotMap.put(slot, drop.getUniqueId());
