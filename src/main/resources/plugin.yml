@@ -5,5 +5,8 @@ api-version: 1.20
 commands:
   recover:
     description: Restore a player's last inventory (OP only)
-    usage: /recover <PlayerName>
+    usage: /recover <PlayerName> [list|force]
     permission: op
+    tab-completions:
+      - list
+      - force
