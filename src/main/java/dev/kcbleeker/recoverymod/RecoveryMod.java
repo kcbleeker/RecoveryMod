@@ -14,15 +14,14 @@ import org.bukkit.inventory.ItemStack;
 import org.bukkit.plugin.PluginManager;
 import org.bukkit.scheduler.BukkitRunnable;
 import org.bukkit.plugin.java.JavaPlugin;
-
 import org.yaml.snakeyaml.Yaml;
 import org.yaml.snakeyaml.DumperOptions;
-
 import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.util.*;
+import dev.kcbleeker.recoverymod.RecoveryTracking.TrackedItem;
 
 public class RecoveryMod extends JavaPlugin implements Listener {
     private File dataFolder;
@@ -30,77 +29,26 @@ public class RecoveryMod extends JavaPlugin implements Listener {
     private RecoveryCommandHandler commandHandler;
     private DumperOptions dumperOptions;
     private int fileRetentionDays = 30;
-    // Tracking maps
-    private final Map<UUID, Set<UUID>> trackedDrops = new HashMap<>();
-    private final Map<UUID, Map<Integer, UUID>> slotToDropId = new HashMap<>();
+    // Tracking map: player UUID -> list of tracked items
+    private final Map<UUID, List<TrackedItem>> trackedItems = new HashMap<>();
     // Debounce map: player UUID -> scheduled save task
     private final Map<UUID, BukkitRunnable> debounceTasks = new HashMap<>();
 
     @Override
     public void onEnable() {
-        dataFolder = new File(getDataFolder(), "recoveries");
-        if (!dataFolder.exists()) dataFolder.mkdirs();
-        dumperOptions = getDumperOptions();
-        persistence = new RecoveryPersistence(dataFolder, dumperOptions);
-        commandHandler = new RecoveryCommandHandler(persistence, dataFolder, trackedDrops, slotToDropId);
-        PluginManager pm = getServer().getPluginManager();
-        pm.registerEvents(this, this);
-        // Ensure config.yml exists with default if missing
-        File configFile = new File(getDataFolder(), "config.yml");
-        if (!configFile.exists()) {
-            try (FileWriter writer = new FileWriter(configFile)) {
-                writer.write("retentionDays: 30\n");
-            } catch (IOException e) {
-                getLogger().warning("Failed to create default config.yml");
-            }
-        }
-        // Load config for retention days if present
-        try {
-            Yaml yaml = new Yaml();
-            Map<String, Object> config = yaml.load(Files.newInputStream(configFile.toPath()));
-            if (config != null && config.containsKey("retentionDays")) {
-                fileRetentionDays = (int) config.get("retentionDays");
-            }
-        } catch (Exception ignored) {}
-        // Cleanup old recovery and tracking files
-        long cutoff = System.currentTimeMillis() - (fileRetentionDays * 24L * 60 * 60 * 1000);
-        File[] files = dataFolder.listFiles((dir, name) -> name.endsWith(".yml"));
-        if (files != null) {
-            for (File file : files) {
-                try {
-                    Map<String, Object> data = persistence.loadYaml(file);
-                    Object tsObj = data != null ? data.get("timestamp") : null;
-                    long ts = 0;
-                    if (tsObj instanceof Number) ts = ((Number) tsObj).longValue();
-                    else if (tsObj != null) ts = Long.parseLong(tsObj.toString());
-                    if (ts > 0 && ts < cutoff) file.delete();
-                } catch (Exception ignored) {}
-            }
-        }
-        // Load tracking for all players with tracking files
-        files = dataFolder.listFiles((dir, name) -> name.endsWith("-tracking.yml"));
-        if (files != null) {
-            for (File file : files) {
-                String uuidStr = file.getName().replace("-tracking.yml", "");
-                try {
-                    UUID uuid = UUID.fromString(uuidStr);
-                    loadTrackingData(uuid);
-                } catch (Exception ignored) {}
-            }
-        }
+        setupDataFolder();
+        setupPersistenceAndCommands();
+        registerEvents();
+        handleConfigFile();
+        cleanupOldRecoveryFiles();
+        loadAllPlayerTracking();
         getLogger().info("RecoveryMod enabled!");
     }
 
     @Override
     public void onDisable() {
-        // Save all tracking data on disable
-        for (UUID uuid : trackedDrops.keySet()) {
-            saveTrackingData(uuid);
-        }
-        // Cancel all debounce tasks
-        for (BukkitRunnable task : debounceTasks.values()) {
-            task.cancel();
-        }
+        trackedItems.keySet().forEach(this::saveTrackingData);
+        debounceTasks.values().forEach(BukkitRunnable::cancel);
         debounceTasks.clear();
         getLogger().info("RecoveryMod disabled!");
     }
@@ -108,53 +56,100 @@ public class RecoveryMod extends JavaPlugin implements Listener {
     @EventHandler
     public void onPlayerDeath(PlayerDeathEvent event) {
         Player player = event.getEntity();
-        ItemStack[] contents = player.getInventory().getContents();
-        List<Map<String, Object>> serialized = new ArrayList<>();
-        Map<Integer, UUID> slotMap = new HashMap<>();
-        Set<UUID> dropIds = new HashSet<>();
-        int slot = 0;
+        List<TrackedItem> tracked = serializeInventory(player.getInventory().getContents());
+        persistence.saveInventoryFile(player, tracked);
+        if (!tracked.isEmpty()) {
+            trackedItems.put(player.getUniqueId(), tracked);
+            scheduleDropIdAssignment(player);
+        }
+    }
+    private List<TrackedItem> serializeInventory(ItemStack[] contents) {
+        List<TrackedItem> tracked = new ArrayList<>();
         for (ItemStack item : contents) {
-            if (item != null) {
-                Map<String, Object> serializedItem = item.serialize();
-                // Always add the type explicitly for clarity
-                serializedItem.put("type", item.getType().name());
-                serialized.add(serializedItem);
-                for (Item drop : event.getEntity().getWorld().getEntitiesByClass(Item.class)) {
-                    if (drop.getLocation().distance(player.getLocation()) < 2.5 && drop.getPickupDelay() != 0 && !dropIds.contains(drop.getUniqueId())) {
-                        slotMap.put(slot, drop.getUniqueId());
-                        dropIds.add(drop.getUniqueId());
+            if (item != null) tracked.add(createTrackedItem(item));
+        }
+        return tracked;
+    }
+    private TrackedItem createTrackedItem(ItemStack item) {
+        Map<String, Object> serializedItem = item.serialize();
+        serializedItem.put("type", item.getType().name());
+        return new TrackedItem(serializedItem, null);
+    }
+    private void scheduleDropIdAssignment(Player player) {
+        new BukkitRunnable() {
+            @Override
+            public void run() {
+                assignDropIds(player);
+            }
+        }.runTaskLater(this, 2L);
+    }
+    private void assignDropIds(Player player) {
+        List<Item> drops = new ArrayList<>(player.getWorld().getEntitiesByClass(Item.class));
+        Set<UUID> usedDropIds = new HashSet<>();
+        List<TrackedItem> updated = new ArrayList<>();
+        List<TrackedItem> current = trackedItems.get(player.getUniqueId());
+        if (current == null) return;
+        for (TrackedItem ti : current) {
+            Map<String, Object> itemData = new HashMap<>(ti.getItemData());
+            itemData.remove("type");
+            ItemStack ref = ItemStack.deserialize(itemData);
+            UUID dropId = null;
+            for (Item drop : drops) {
+                if (!usedDropIds.contains(drop.getUniqueId()) && drop.getLocation().distance(player.getLocation()) < 2.5 && drop.getPickupDelay() > 0) {
+                    ItemStack dropStack = drop.getItemStack();
+                    if (dropStack.getType() == ref.getType() && dropStack.getAmount() == ref.getAmount()) {
+                        dropId = drop.getUniqueId();
+                        usedDropIds.add(dropId);
                         break;
                     }
                 }
-            } else {
-                serialized.add(null);
             }
-            slot++;
+            updated.add(new TrackedItem(ti.getItemData(), dropId));
         }
-        persistence.saveInventoryFile(player, serialized);
-        if (!dropIds.isEmpty()) {
-            trackedDrops.put(player.getUniqueId(), dropIds);
-            slotToDropId.put(player.getUniqueId(), slotMap);
-            scheduleTrackingSave(player.getUniqueId());
-        }
+        trackedItems.put(player.getUniqueId(), updated);
+        scheduleTrackingSave(player.getUniqueId());
     }
 
     @EventHandler
     public void onItemDespawn(ItemDespawnEvent event) {
         UUID itemId = event.getEntity().getUniqueId();
-        trackedDrops.forEach((playerId, dropSet) -> {
-            if (dropSet.remove(itemId)) scheduleTrackingSave(playerId);
+        trackedItems.forEach((playerId, itemList) -> {
+            boolean changed = false;
+            for (int i = 0; i < itemList.size(); i++) {
+                if (markDespawnedIfMatch(itemList, i, itemId, playerId)) changed = true;
+            }
+            if (changed) {
+                scheduleTrackingSave(playerId);
+            }
         });
-        trackedDrops.entrySet().removeIf(e -> e.getValue().isEmpty());
+        // Do NOT remove entries here; let recovery or pickup handle cleanup
+    }
+    private boolean markDespawnedIfMatch(List<TrackedItem> itemList, int i, UUID itemId, UUID playerId) {
+        TrackedItem ti = itemList.get(i);
+        if (itemId.equals(ti.getDropId())) {
+            Map<String, Object> newData = new HashMap<>(ti.getItemData());
+            newData.put("_despawned", true);
+            itemList.set(i, new TrackedItem(newData, null));
+            return true;
+        }
+        return false;
     }
 
     @EventHandler
     public void onItemPickup(EntityPickupItemEvent event) {
         UUID itemId = event.getItem().getUniqueId();
-        trackedDrops.forEach((playerId, dropSet) -> {
-            if (dropSet.remove(itemId)) scheduleTrackingSave(playerId);
+        trackedItems.forEach((playerId, itemList) -> {
+            boolean changed = false;
+            for (TrackedItem ti : itemList) {
+                if (itemId.equals(ti.getDropId())) {
+                    itemList.remove(ti);
+                    changed = true;
+                    break;
+                }
+            }
+            if (changed) scheduleTrackingSave(playerId);
         });
-        trackedDrops.entrySet().removeIf(e -> e.getValue().isEmpty());
+        trackedItems.entrySet().removeIf(e -> e.getValue().isEmpty());
     }
 
     @Override
@@ -164,9 +159,22 @@ public class RecoveryMod extends JavaPlugin implements Listener {
                 sender.sendMessage("You must be OP to use this command.");
                 return true;
             }
-            return commandHandler.handleRecoverCommand(sender, args);
+            boolean result = commandHandler.handleRecoverCommand(sender, args);
+            if (args.length == 1) cleanupAfterRecovery(args[0]);
+            return result;
         }
         return false;
+    }
+    private void cleanupAfterRecovery(String playerName) {
+        Player target = Bukkit.getPlayer(playerName);
+        if (target != null) {
+            List<TrackedItem> items = trackedItems.get(target.getUniqueId());
+            if (items != null) {
+                items.removeIf(ti -> ti.getDropId() == null);
+                if (items.isEmpty()) trackedItems.remove(target.getUniqueId());
+                scheduleTrackingSave(target.getUniqueId());
+            }
+        }
     }
 
     private void scheduleTrackingSave(UUID playerId) {
@@ -182,39 +190,84 @@ public class RecoveryMod extends JavaPlugin implements Listener {
         task.runTaskLater(this, 40L);
         debounceTasks.put(playerId, task);
     }
-
     private void saveTrackingData(UUID playerId) {
-        Set<UUID> drops = trackedDrops.getOrDefault(playerId, Collections.emptySet());
-        Map<Integer, UUID> slotMap = slotToDropId.getOrDefault(playerId, Collections.emptyMap());
-        persistence.saveTrackingData(playerId, drops, slotMap);
+        List<TrackedItem> items = trackedItems.getOrDefault(playerId, Collections.emptyList());
+        persistence.saveTrackingData(playerId, items);
     }
-
     private void loadTrackingData(UUID playerId) {
         File file = new File(dataFolder, playerId + "-tracking.yml");
-        Map<String, Object> data = persistence.loadYaml(file);
-        if (data == null) return;
-        Set<UUID> drops = new HashSet<>();
-        Object dropsObj = data.get("drops");
-        if (dropsObj instanceof Collection<?>) {
-            for (Object o : (Collection<?>) dropsObj) {
-                if (o != null) drops.add(UUID.fromString(o.toString()));
-            }
-        }
-        Map<Integer, UUID> slotMap = new HashMap<>();
-        Object slotMapObj = data.get("slotMap");
-        if (slotMapObj instanceof Map<?, ?>) {
-            for (Map.Entry<?, ?> entry : ((Map<?, ?>) slotMapObj).entrySet()) {
-                slotMap.put(Integer.parseInt(entry.getKey().toString()), UUID.fromString(entry.getValue().toString()));
-            }
-        }
-        trackedDrops.put(playerId, drops);
-        slotToDropId.put(playerId, slotMap);
+        List<TrackedItem> items = persistence.loadTrackingData(file);
+        if (items != null && !items.isEmpty()) trackedItems.put(playerId, items);
     }
-
     private DumperOptions getDumperOptions() {
         DumperOptions options = new DumperOptions();
         options.setDefaultFlowStyle(DumperOptions.FlowStyle.BLOCK);
         options.setPrettyFlow(true);
         return options;
+    }
+
+    private void handleConfig(File configFile) {
+        if (!configFile.exists()) createDefaultConfig(configFile);
+        loadConfig(configFile);
+    }
+    private void createDefaultConfig(File configFile) {
+        try (FileWriter writer = new FileWriter(configFile)) {
+            writer.write("retentionDays: 30\n");
+        } catch (IOException e) {
+            getLogger().warning("Failed to create default config.yml");
+        }
+    }
+    private void loadConfig(File configFile) {
+        try {
+            Yaml yaml = new Yaml();
+            Map<String, Object> config = yaml.load(Files.newInputStream(configFile.toPath()));
+            if (config != null && config.containsKey("retentionDays"))
+                fileRetentionDays = (int) config.get("retentionDays");
+        } catch (Exception ignored) {}
+    }
+    private void cleanupOldFiles(File[] files, long cutoff) {
+        if (files == null) return;
+        for (File file : files) {
+            try {
+                Map<String, Object> data = persistence.loadYaml(file);
+                Object tsObj = data != null ? data.get("timestamp") : null;
+                long ts = tsObj instanceof Number ? ((Number) tsObj).longValue() : tsObj != null ? Long.parseLong(tsObj.toString()) : 0;
+                if (ts > 0 && ts < cutoff) file.delete();
+            } catch (Exception ignored) {}
+        }
+    }
+    private void loadAllTracking(File[] files) {
+        if (files == null) return;
+        for (File file : files) {
+            String uuidStr = file.getName().replace("-tracking.yml", "");
+            try {
+                UUID uuid = UUID.fromString(uuidStr);
+                loadTrackingData(uuid);
+            } catch (Exception ignored) {}
+        }
+    }
+    private void setupDataFolder() {
+        dataFolder = new File(getDataFolder(), "recoveries");
+        if (!dataFolder.exists()) dataFolder.mkdirs();
+        dumperOptions = getDumperOptions();
+    }
+    private void setupPersistenceAndCommands() {
+        persistence = new RecoveryPersistence(dataFolder, dumperOptions);
+        commandHandler = new RecoveryCommandHandler(persistence, dataFolder, trackedItems, this::scheduleTrackingSave);
+    }
+    private void registerEvents() {
+        PluginManager pm = getServer().getPluginManager();
+        pm.registerEvents(this, this);
+    }
+    private void handleConfigFile() {
+        File configFile = new File(getDataFolder(), "config.yml");
+        handleConfig(configFile);
+    }
+    private void cleanupOldRecoveryFiles() {
+        long cutoff = System.currentTimeMillis() - (fileRetentionDays * 24L * 60 * 60 * 1000);
+        cleanupOldFiles(dataFolder.listFiles((dir, name) -> name.endsWith(".yml")), cutoff);
+    }
+    private void loadAllPlayerTracking() {
+        loadAllTracking(dataFolder.listFiles((dir, name) -> name.endsWith("-tracking.yml")));
     }
 }

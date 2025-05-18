@@ -1,27 +1,38 @@
 package dev.kcbleeker.recoverymod;
 
-import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.UUID;
 
 /**
- * Handles tracking of dropped item entities and slot mapping for a player's death.
+ * Represents a tracked lost item with its serialized data and drop entity UUID.
  */
 public class RecoveryTracking {
-    private final Set<UUID> dropIds = new HashSet<>();
-    private final Map<Integer, UUID> slotToDropId;
+    public static class TrackedItem {
+        private final Map<String, Object> itemData;
+        private final UUID dropId; // null if despawned
 
-    public RecoveryTracking(Set<UUID> dropIds, Map<Integer, UUID> slotToDropId) {
-        this.dropIds.addAll(dropIds);
-        this.slotToDropId = slotToDropId;
+        public TrackedItem(Map<String, Object> itemData, UUID dropId) {
+            this.itemData = itemData;
+            this.dropId = dropId;
+        }
+
+        public Map<String, Object> getItemData() {
+            return itemData;
+        }
+
+        public UUID getDropId() {
+            return dropId;
+        }
     }
 
-    public Set<UUID> getDropIds() {
-        return dropIds;
+    private final List<TrackedItem> items;
+
+    public RecoveryTracking(List<TrackedItem> items) {
+        this.items = items;
     }
 
-    public Map<Integer, UUID> getSlotToDropId() {
-        return slotToDropId;
+    public List<TrackedItem> getItems() {
+        return items;
     }
 }
