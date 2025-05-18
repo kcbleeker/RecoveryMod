@@ -10,21 +10,12 @@ import dev.kcbleeker.recoverymod.RecoveryTracking.TrackedItem;
 public class DropAssignmentManager {
     private final RecoveryMod plugin;
     private final Map<UUID, List<TrackedItem>> trackedItems;
-    private final Runnable saveScheduler;
+    private final java.util.function.Consumer<UUID> saveScheduler;
 
-    public DropAssignmentManager(RecoveryMod plugin, Map<UUID, List<TrackedItem>> trackedItems, Runnable saveScheduler) {
+    public DropAssignmentManager(RecoveryMod plugin, Map<UUID, List<TrackedItem>> trackedItems, java.util.function.Consumer<UUID> saveScheduler) {
         this.plugin = plugin;
         this.trackedItems = trackedItems;
         this.saveScheduler = saveScheduler;
-    }
-
-    public void scheduleDropIdAssignment(Player player) {
-        new BukkitRunnable() {
-            @Override
-            public void run() {
-                assignDropIds(player);
-            }
-        }.runTaskLater(plugin, 2L);
     }
 
     private void assignDropIds(Player player) {
@@ -53,6 +44,15 @@ public class DropAssignmentManager {
         trackedItems.put(player.getUniqueId(), updated);
         // Update dropToPlayer map in RecoveryMod
         plugin.updateDropToPlayerMap(player.getUniqueId(), updated);
-        saveScheduler.run();
+        saveScheduler.accept(player.getUniqueId());
+    }
+
+    public void scheduleDropIdAssignment(Player player) {
+        new BukkitRunnable() {
+            @Override
+            public void run() {
+                assignDropIds(player);
+            }
+        }.runTaskLater(plugin, 2L);
     }
 }

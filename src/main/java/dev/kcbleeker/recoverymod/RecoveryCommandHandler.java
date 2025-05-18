@@ -89,7 +89,7 @@ public class RecoveryCommandHandler {
               .append(String.format("%-20s", itemName))
               .append("<yellow>")
               .append(amount)
-              .append("</yellow></white></gray>\n");
+              .append("</yellow></white>\n");
         }
         Component msg = mm.deserialize(sb.toString());
         sender.sendMessage(msg);

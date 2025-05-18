@@ -48,7 +48,7 @@ public class RecoveryMod extends JavaPlugin implements Listener {
         handleConfigFile();
         cleanupOldRecoveryFiles();
         loadAllPlayerTracking();
-        dropAssignmentManager = new DropAssignmentManager(this, trackedItems, () -> {});
+        dropAssignmentManager = new DropAssignmentManager(this, trackedItems, this::scheduleTrackingSave);
         getLogger().info("RecoveryMod enabled!");
     }
 
@@ -73,15 +73,22 @@ public class RecoveryMod extends JavaPlugin implements Listener {
 
     private List<TrackedItem> serializeInventory(Player player) {
         List<TrackedItem> tracked = new ArrayList<>();
-        for (ItemStack item : player.getInventory().getContents()) {
-            if (item != null) tracked.add(createTrackedItem(item));
-        }
-        for (ItemStack item : player.getInventory().getArmorContents()) {
-            if (item != null) tracked.add(createTrackedItem(item));
-        }
-        ItemStack offhand = player.getInventory().getItemInOffHand();
-        if (offhand != null && offhand.getType() != org.bukkit.Material.AIR) tracked.add(createTrackedItem(offhand));
+        addItems(tracked, player.getInventory().getContents());
+        addItems(tracked, player.getInventory().getArmorContents());
+        addOffhand(tracked, player);
         return tracked;
+    }
+
+    private void addItems(List<TrackedItem> tracked, ItemStack[] items) {
+        for (ItemStack item : items) {
+            if (item != null) tracked.add(createTrackedItem(item));
+        }
+    }
+
+    private void addOffhand(List<TrackedItem> tracked, Player player) {
+        ItemStack offhand = player.getInventory().getItemInOffHand();
+        if (offhand != null && offhand.getType() != org.bukkit.Material.AIR)
+            tracked.add(createTrackedItem(offhand));
     }
 
     private TrackedItem createTrackedItem(ItemStack item) {
@@ -92,22 +99,26 @@ public class RecoveryMod extends JavaPlugin implements Listener {
 
     @EventHandler
     public void onEntityRemoved(EntityRemoveEvent event) {
-        if (!(event.getEntity() instanceof org.bukkit.entity.Item)) return;
-        if (event.getCause() != EntityRemoveEvent.Cause.DESPAWN) return;
+        if (!isTrackedItemEntity(event)) return;
         UUID itemId = event.getEntity().getUniqueId();
         UUID playerId = dropToPlayer.get(itemId);
-        if (playerId != null) {
-            List<TrackedItem> itemList = trackedItems.get(playerId);
-            if (itemList != null) {
-                for (int i = 0; i < itemList.size(); i++) {
-                    if (markDespawnedIfMatch(itemList, i, itemId, playerId)) {
-                        scheduleTrackingSave(playerId);
-                        break;
-                    }
-                }
+        if (playerId != null) markDespawnedAndSave(itemId, playerId);
+    }
+
+    private boolean isTrackedItemEntity(EntityRemoveEvent event) {
+        return event.getEntity() instanceof org.bukkit.entity.Item &&
+               event.getCause() == EntityRemoveEvent.Cause.DESPAWN;
+    }
+
+    private void markDespawnedAndSave(UUID itemId, UUID playerId) {
+        List<TrackedItem> itemList = trackedItems.get(playerId);
+        if (itemList == null) return;
+        for (int i = 0; i < itemList.size(); i++) {
+            if (markDespawnedIfMatch(itemList, i, itemId, playerId)) {
+                scheduleTrackingSave(playerId);
+                break;
             }
         }
-        // Do NOT remove entries here; let recovery or pickup handle cleanup
     }
 
     private boolean markDespawnedIfMatch(List<TrackedItem> itemList, int i, UUID itemId, UUID playerId) {
@@ -125,24 +136,27 @@ public class RecoveryMod extends JavaPlugin implements Listener {
     public void onItemPickup(EntityPickupItemEvent event) {
         UUID itemId = event.getItem().getUniqueId();
         UUID playerId = dropToPlayer.get(itemId);
-        if (playerId != null) {
-            List<TrackedItem> itemList = trackedItems.get(playerId);
-            if (itemList != null) {
-                Iterator<TrackedItem> it = itemList.iterator();
-                boolean changed = false;
-                while (it.hasNext()) {
-                    TrackedItem ti = it.next();
-                    if (itemId.equals(ti.getDropId())) {
-                        it.remove();
-                        changed = true;
-                        break;
-                    }
-                }
-                if (changed) cleanupTrackedItems(playerId);
-            }
-            dropToPlayer.remove(itemId);
-        }
+        if (playerId != null) handleTrackedPickup(itemId, playerId);
         trackedItems.entrySet().removeIf(e -> e.getValue().isEmpty());
+    }
+
+    private void handleTrackedPickup(UUID itemId, UUID playerId) {
+        List<TrackedItem> itemList = trackedItems.get(playerId);
+        if (itemList != null && removeTrackedItem(itemList, itemId))
+            cleanupTrackedItems(playerId);
+        dropToPlayer.remove(itemId);
+    }
+
+    private boolean removeTrackedItem(List<TrackedItem> itemList, UUID itemId) {
+        Iterator<TrackedItem> it = itemList.iterator();
+        while (it.hasNext()) {
+            TrackedItem ti = it.next();
+            if (itemId.equals(ti.getDropId())) {
+                it.remove();
+                return true;
+            }
+        }
+        return false;
     }
 
     @Override
